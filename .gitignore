@@ -4,4 +4,5 @@ __pycache__/
 out
 website/
 docs-minimind/
-minimind-3/**
+**/minimind-3/**
+dataset/**
