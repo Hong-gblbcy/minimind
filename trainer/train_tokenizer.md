@@ -9,7 +9,7 @@
 > ⚠️ **重要提示**（来自脚本头部注释）：
 > 不建议重复训练 tokenizer。MiniMind 已自带训练好的 tokenizer，基于不同词典训练的模型会导致输出完全不统一，降低社区模型复用性。**本脚本仅供学习和参考**。
 
-## 二、Tokenzier 是什么？
+## 二、Tokenizer 是什么？
 
 分词器（Tokenizer）是连接「原始文本」与「模型」的桥梁：
 
@@ -134,3 +134,79 @@ python train_tokenizer.py
 2. **预置特殊 token** 为多模态、工具调用、思考（R1 风格）预留了位置。
 3. **buffer token 预留机制** 为未来扩展词典留出空间，保证词典结构稳定。
 4. **chat_template 内嵌** 到 config 中，让训练好的 tokenizer 可直接配合 `apply_chat_template` 使用。
+
+## 九、项目脉络：Tokenizer 为什么位于所有阶段之前？
+
+Tokenizer 决定“文本如何映射到模型参数中的行号”：
+
+```text
+文本
+  └─> Tokenizer: token -> id
+        └─> Embedding[id]
+              └─> Transformer
+                    └─> lm_head[id]
+                          └─> Tokenizer: id -> 文本
+```
+
+Embedding 的第 100 行与输出头的第 100 类代表哪个 token，完全由词表定义。模型权重一旦训练，这个 id 映射就固定了。即使新 Tokenizer 仍有 6400 个 token，只要排列不同，同一行参数就对应了不同文本，原权重的语义会整体错位。
+
+因此项目主线是：
+
+```text
+固定 Tokenizer
+  ├─> PretrainDataset
+  ├─> SFT / DPO 数据模板
+  ├─> PPO / GRPO / Agent rollout
+  ├─> 命令行与 API 推理
+  └─> 模型格式转换
+```
+
+这解释了脚本为什么明确标注“仅供学习”，也解释了重新训练词表会破坏社区权重兼容性。
+
+## 十、特殊 Token 的实现细节
+
+训练器最初把 `all_special_tokens` 交给 `BpeTrainer`，目的有两个：
+
+1. 这些字符串从训练开始就占据固定 token id。
+2. BPE 不会把它们拆成普通字节片段。
+
+训练完成后，代码又编辑 `tokenizer.json`：不属于 `special_tokens_list` 的 added token 会被标记为 `special=False`。因此工具和 thinking 标签虽然保持单 token，却不会都被 `skip_special_tokens=True` 自动删除。
+
+这个区别很重要：
+
+- `<|im_start|>`、`<|im_end|>` 等控制符通常不应显示给用户，适合作为真正 special token。
+- `<tool_call>`、`<think>` 等标签需要在训练、解析或流式展示阶段保留，若解码时直接跳过，协议结构就会丢失。
+
+Buffer token 则预占词表位置，为未来替换或扩展保留 id 空间，减少已有 id 整体移动的风险。
+
+## 十一、Chat Template 的执行脉络
+
+生成的 `tokenizer_config.json` 内嵌 Jinja 模板，负责把结构化 messages 变成训练文本。主要分支包括：
+
+- 有 tools：构造 system 工具说明和 `<tools>` JSON 列表。
+- system/user 消息：加入 `<|im_start|>role` 与 `<|im_end|>`。
+- assistant 消息：组合 `reasoning_content`、`<think>` 和正文。
+- assistant tool_calls：输出 `<tool_call>` 包裹的 JSON。
+- tool 消息：连续工具结果组合为 `<tool_response>` 区域。
+- `add_generation_prompt=True`：在末尾添加 assistant 起始标记。
+- `open_thinking=True`：只打开 `<think>`；否则插入一个空 thinking 块后进入答案。
+
+数据集、训练和推理都调用 `apply_chat_template`，所以模板是协议的单一事实来源。修改模板后必须同步验证 SFT label 识别、Tool Call 解析和推理输入。
+
+## 十二、输出文件与兼容性
+
+脚本会在 `TOKENIZER_DIR` 下生成或更新：
+
+- `tokenizer.json`：完整 Fast Tokenizer 描述。
+- BPE 模型文件：词表和 merge 规则。
+- `tokenizer_config.json`：特殊 token、最大长度、多模态字段和聊天模板。
+
+`model_max_length=131072` 是 Tokenizer 接口允许的上限声明，不代表 MiniMind 已训练到该上下文长度，也不代表模型 RoPE、显存和数据都支持同样长度。
+
+## 十三、数据与评估边界
+
+- `get_texts` 只读取前 10000 行，当前脚本定位是教学实验，不是大规模生产词表训练流水线。
+- JSON 解析失败的行会静默跳过，正式训练前应单独检查语料质量。
+- 压缩率只衡量字符/token 比，不直接代表下游模型质量。
+- 编解码一致性测试非常重要，但通过它仍不能证明聊天模板、特殊 token id 和已有权重兼容。
+- 流式解码中的 `\ufffd` 表示 UTF-8 字节序列尚不完整；代码缓存 token，直到能够无损解码再显示。
