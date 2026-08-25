@@ -1,5 +1,7 @@
 # train_tokenizer.py 介绍
 
+对应源码：[`train_tokenizer.py`](./train_tokenizer.py)
+
 ## 一、文件定位
 
 `train_tokenizer.py` 是 MiniMind 项目中用于**训练 BPE 分词器（Tokenizer，即"词典"）**的脚本。
@@ -119,8 +121,11 @@ if __name__ == '__main__':
 
 直接运行脚本即可完成「训练 → 保存 → 评估」全流程：
 
+脚本中的默认数据与输出路径以 `trainer/` 为当前目录，因此应从该目录运行：
+
 ```bash
-python trainer/train_tokenizer.py
+cd trainer
+python train_tokenizer.py
 ```
 
 ## 八、关键设计点总结

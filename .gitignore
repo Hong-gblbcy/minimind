@@ -6,3 +6,5 @@ website/
 docs-minimind/
 **/minimind-3/**
 dataset/**
+!dataset/__init__.md
+!dataset/lm_dataset.md
